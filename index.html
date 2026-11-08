@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ProctorLite — Local Assessment &amp; Hardware Check</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Top Dark Header + Persistent Status Bar -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-logo" aria-hidden="true">◉</span>
+      <span class="brand-title">ProctorLite</span>
+      <span class="brand-tag">Local Hardware &amp; Proctoring Sandbox</span>
+    </div>
+
+    <div class="status-bar" role="status" aria-label="Live System Status">
+      <div class="status-pill" id="sb-fullscreen" title="Fullscreen status">
+        <span class="dot"></span>
+        <span>Fullscreen: <strong id="sb-fullscreen-val">OFF</strong></span>
+      </div>
+      <div class="status-pill" id="sb-camera" title="Camera feed status">
+        <span class="dot"></span>
+        <span>Camera: <strong id="sb-camera-val">PENDING</strong></span>
+      </div>
+      <div class="status-pill" id="sb-mic" title="Microphone status">
+        <span class="dot"></span>
+        <span>Mic: <strong id="sb-mic-val">PENDING</strong></span>
+      </div>
+      <div class="status-pill" id="sb-network" title="Live network latency to localhost">
+        <span class="dot" id="sb-net-dot"></span>
+        <span>Latency: <strong id="sb-network-val">-- ms</strong></span>
+      </div>
+      <div class="status-pill" id="sb-violations" title="Total proctoring violations during session">
+        <span>Violations: <strong id="sb-violations-val">0</strong></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Alert Banners -->
+  <div id="banner-offline" class="top-banner banner-warning hidden" role="alert">
+    <strong>Network Offline:</strong> Browser reported loss of network connectivity. Waiting for reconnection...
+  </div>
+  <div id="banner-flagged" class="top-banner banner-danger hidden" role="alert">
+    <strong>Test would be flagged:</strong> 5 or more proctoring violations have been recorded (mock mode — session continues).
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Blocking Fullscreen Exit Modal -->
+  <div id="fs-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="fs-modal-title">
+    <div class="modal-card">
+      <div class="modal-icon" aria-hidden="true">⚠️</div>
+      <h2 id="fs-modal-title">You left fullscreen</h2>
+      <p>
+        Proctored assessments require fullscreen mode at all times. Exiting fullscreen has been logged as a violation, and time spent outside fullscreen is being tracked.
+      </p>
+      <p id="fs-modal-error" class="modal-error" role="status"></p>
+      <button id="btn-return-fs" type="button" class="btn btn-primary btn-lg">
+        Return to Fullscreen
+      </button>
+    </div>
+  </div>
+
+  <!-- Blocking modal: user returned after leaving the window (tab switch / blur) -->
+  <div id="away-modal" class="modal-backdrop modal-away hidden" role="alertdialog" aria-modal="true" aria-labelledby="away-modal-title" aria-describedby="away-modal-text">
+    <div class="modal-card">
+      <div class="modal-icon" aria-hidden="true">🚨</div>
+      <h2 id="away-modal-title">You left the test window</h2>
+      <p id="away-modal-text">You left the test window for 0 seconds. This has been recorded.</p>
+      <button id="btn-away-ok" type="button" class="btn btn-primary btn-lg">I understand</button>
+    </div>
+  </div>
+
+  <!-- Blocking modal: camera / microphone lost; closes automatically once working again -->
+  <div id="device-modal" class="modal-backdrop modal-device hidden" role="alertdialog" aria-modal="true" aria-labelledby="device-modal-title">
+    <div class="modal-card">
+      <div class="modal-icon" aria-hidden="true">🎥</div>
+      <h2 id="device-modal-title">Camera or microphone problem</h2>
+      <p>The test is paused from your side until every device below is working again. This has been recorded.</p>
+      <ul id="device-modal-list" class="device-list"></ul>
+      <p id="device-modal-error" class="modal-error" role="status"></p>
+      <button id="btn-device-retry" type="button" class="btn btn-primary btn-lg">Retry devices</button>
+    </div>
+  </div>
+
+  <main class="main-container">
+    <!-- ==================== SCREEN 1: SYSTEM CHECK ==================== -->
+    <section id="screen-check" class="screen">
+      <div class="screen-intro">
+        <div>
+          <h1>Pre-Assessment System Check</h1>
+          <p class="subtitle">
+            Verify your browser, camera, microphone, fullscreen, and local network latency before starting the mock assessment.
+            <strong>100% local:</strong> no video, audio, or telemetry ever leaves your machine.
+          </p>
+        </div>
+        <div class="intro-actions">
+          <button id="btn-recheck-all" type="button" class="btn btn-secondary">
+            Re-check All Required
+          </button>
+          <button id="btn-start-test" type="button" class="btn btn-primary btn-lg" disabled>
+            Start Test (Enter Fullscreen)
+          </button>
+        </div>
+      </div>
+
+      <div class="checklist-grid">
+        <!-- 1a. Browser + OS Info -->
+        <article class="check-card" id="card-browser">
+          <div class="check-header">
+            <div>
+              <h2>1. Browser &amp; Display Environment</h2>
+              <span class="check-req">Required</span>
+            </div>
+            <div class="check-actions">
+              <span id="badge-browser" class="badge badge-pending">Pending</span>
+              <button type="button" class="btn btn-sm btn-outline" data-recheck="browser">Re-check</button>
+            </div>
+          </div>
+          <div class="check-body">
+            <dl class="meta-grid" id="browser-details">
+              <div><dt>User Agent</dt><dd id="info-ua">--</dd></div>
+              <div><dt>Platform</dt><dd id="info-platform">--</dd></div>
+              <div><dt>Resolution &amp; DPR</dt><dd id="info-screen">--</dd></div>
+              <div><dt>Detected Screens</dt><dd id="info-screens-count">--</dd></div>
+            </dl>
+            <p class="hint" id="hint-browser">Checking browser environment capabilities...</p>
+          </div>
+        </article>
+
+        <!-- 1b. Camera -->
+        <article class="check-card" id="card-camera">
+          <div class="check-header">
+            <div>
+              <h2>2. Camera Verification</h2>
+              <span class="check-req">Required</span>
+            </div>
+            <div class="check-actions">
+              <span id="badge-camera" class="badge badge-pending">Pending</span>
+              <button type="button" class="btn btn-sm btn-outline" data-recheck="camera">Re-check</button>
+            </div>
+          </div>
+          <div class="check-body check-body-split">
+            <div class="video-preview-wrap">
+              <video id="check-video" autoplay playsinline muted></video>
+              <span class="video-overlay-label" id="camera-stats-overlay">No feed</span>
+            </div>
+            <div class="check-details">
+              <dl class="meta-grid">
+                <div><dt>Device</dt><dd id="info-cam-label">--</dd></div>
+                <div><dt>Resolution</dt><dd id="info-cam-res">--</dd></div>
+                <div><dt>Measured FPS</dt><dd id="info-cam-fps">--</dd></div>
+              </dl>
+              <p class="hint" id="hint-camera">Click "Re-check" to grant camera permission and inspect stream.</p>
+            </div>
+          </div>
+        </article>
+
+        <!-- 1c. Microphone -->
+        <article class="check-card" id="card-mic">
+          <div class="check-header">
+            <div>
+              <h2>3. Microphone &amp; Voice Threshold</h2>
+              <span class="check-req">Required</span>
+            </div>
+            <div class="check-actions">
+              <span id="badge-mic" class="badge badge-pending">Pending</span>
+              <button type="button" class="btn btn-sm btn-outline" data-recheck="mic">Re-check</button>
+            </div>
+          </div>
+          <div class="check-body">
+            <dl class="meta-grid">
+              <div><dt>Device</dt><dd id="info-mic-label">--</dd></div>
+              <div><dt>Peak Input Level</dt><dd id="info-mic-peak">0%</dd></div>
+              <div><dt>Voice Check</dt><dd id="info-mic-threshold">Say something to cross threshold (15%)</dd></div>
+            </dl>
+            <div class="meter-wrapper" aria-label="Microphone input level meter">
+              <div class="meter-bar" id="check-mic-bar"></div>
+              <div class="meter-threshold" title="Required threshold (15%)"></div>
+            </div>
+            <p class="hint" id="hint-mic">Grant microphone permission and speak clearly until the bar passes the marker.</p>
+          </div>
+        </article>
+
+        <!-- 1d. Network -->
+        <article class="check-card" id="card-network">
+          <div class="check-header">
+            <div>
+              <h2>4. Network Latency &amp; Jitter</h2>
+              <span class="check-req">Required (Avg &le; 300ms)</span>
+            </div>
+            <div class="check-actions">
+              <span class="live-ping-indicator" id="net-live-indicator" title="Background check every 5s">● Live (5s)</span>
+              <span id="badge-network" class="badge badge-pending">Pending</span>
+              <button type="button" class="btn btn-sm btn-outline" data-recheck="network">Re-check</button>
+            </div>
+          </div>
+          <div class="check-body">
+            <dl class="meta-grid">
+              <div><dt>10-Ping Min / Avg / Max</dt><dd id="info-net-rtt">-- / -- / -- ms</dd></div>
+              <div><dt>Jitter (Mean Δ)</dt><dd id="info-net-jitter">-- ms</dd></div>
+              <div><dt>Connection API</dt><dd id="info-net-conn">--</dd></div>
+            </dl>
+            <p class="hint" id="hint-network">Pinging local server (ping.txt x 10)...</p>
+          </div>
+        </article>
+
+        <!-- 1e. Fullscreen -->
+        <article class="check-card" id="card-fullscreen">
+          <div class="check-header">
+            <div>
+              <h2>5. Fullscreen Capability</h2>
+              <span class="check-req">Required</span>
+            </div>
+            <div class="check-actions">
+              <span id="badge-fullscreen" class="badge badge-pending">Pending</span>
+              <button type="button" class="btn btn-sm btn-primary" id="btn-test-fullscreen" data-recheck="fullscreen">
+                Enter Fullscreen
+              </button>
+            </div>
+          </div>
+          <div class="check-body">
+            <p class="check-desc">
+              Browsers require a direct user gesture to enter fullscreen. Click <strong>Enter Fullscreen</strong> above to verify your window manager / Wayland / X11 setup allows fullscreen mode.
+            </p>
+            <p class="hint" id="hint-fullscreen">Waiting for fullscreen verification...</p>
+          </div>
+        </article>
+
+        <!-- 1f. Screen Share & Experimental Face Check (Optional) -->
+        <article class="check-card" id="card-screen">
+          <div class="check-header">
+            <div>
+              <h2>6. Screen Share &amp; Optional Checks</h2>
+              <span class="check-opt">Optional</span>
+            </div>
+            <div class="check-actions">
+              <span id="badge-screen" class="badge badge-optional">Optional</span>
+              <button type="button" class="btn btn-sm btn-outline" id="btn-test-screen" data-recheck="screen">
+                Test Screen Share
+              </button>
+            </div>
+          </div>
+          <div class="check-body">
+            <dl class="meta-grid">
+              <div><dt>Display Surface</dt><dd id="info-screen-surface">Not shared</dd></div>
+              <div><dt>Resolution</dt><dd id="info-screen-res">--</dd></div>
+            </dl>
+            <p class="hint" id="hint-screen">
+              Optional: Click "Test Screen Share" to verify PipeWire / XDG Desktop Portal screen sharing. Entire screen ("monitor") is recommended over a tab or window.
+            </p>
+            <hr class="divider" />
+            <div class="optional-toggle-row">
+              <label class="checkbox-label" for="toggle-facedetector">
+                <input type="checkbox" id="toggle-facedetector" />
+                <span>Enable experimental <code>window.FaceDetector</code> check (every 2s)</span>
+              </label>
+              <span class="sub-hint" id="hint-facedetector">Checking support...</span>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ==================== SCREEN 2: PROCTORED TEST ==================== -->
+    <section id="screen-test" class="screen hidden">
+      <div class="test-layout">
+        <!-- Left Column: Coding Question & Editor -->
+        <div class="test-main">
+          <div class="question-pane" id="question-pane">
+            <div class="pane-header">
+              <span class="problem-badge">Problem 1 of 1</span>
+              <h2>LRU Cache with Time-Bounded Expiration</h2>
+              <span class="noselect-tag" title="Selection, copy, and right-click are monitored and blocked">Protected Content</span>
+            </div>
+            <div class="question-content" id="question-content">
+              <p>
+                Design and implement a data structure for a <strong>Time-Aware Least Recently Used (LRU) Cache</strong> that supports the following operations in <code>O(1)</code> average time complexity:
+              </p>
+              <ul>
+                <li><code>get(key, nowMs)</code> — Return the value associated with <code>key</code> if it exists and has not expired at timestamp <code>nowMs</code>; otherwise return <code>-1</code>.</li>
+                <li><code>put(key, value, ttlMs, nowMs)</code> — Insert or update the value of <code>key</code> with an expiration time of <code>nowMs + ttlMs</code>. If the cache reaches its <code>capacity</code>, evict the least recently used key first.</li>
+              </ul>
+              <pre class="code-sample">Example:
+const cache = new TimedLRUCache(2);
+cache.put("session_a", 42, 1000, 100); // expires at 1100ms
+cache.get("session_a", 500);           // returns 42
+cache.get("session_a", 1200);          // returns -1 (expired)</pre>
+              <p class="question-note">
+                <em>Note:</em> This problem text is copy-protected to test proctoring detections. Try selecting text, right-clicking, pressing <code>Ctrl+C</code>, switching tabs, or pressing <code>Esc</code> to observe live violation logging.
+              </p>
+            </div>
+          </div>
+
+          <div class="editor-pane">
+            <div class="pane-header">
+              <label for="code-editor"><strong>Solution Editor</strong> (JavaScript / Python / Pseudocode)</label>
+              <span class="editor-hint">Copy / Cut / Paste &amp; DevTools shortcuts are monitored</span>
+            </div>
+            <textarea
+              id="code-editor"
+              class="code-editor"
+              spellcheck="false"
+              autocomplete="off"
+              autocapitalize="off"
+              placeholder="// Write your solution here..."
+            >class TimedLRUCache {
+  constructor(capacity) {
+    this.capacity = capacity;
+    this.map = new Map();
+  }
+
+  get(key, nowMs) {
+    // Write your implementation here
+    return -1;
+  }
+
+  put(key, value, ttlMs, nowMs) {
+    // Write your implementation here
+  }
+}
+</textarea>
+          </div>
+        </div>
+
+        <!-- Right Column: Floating Proctor Sidebar -->
+        <aside class="test-sidebar" aria-label="Proctoring Monitor">
+          <!-- Timer & Submit Card -->
+          <div class="sidebar-card timer-card">
+            <div class="timer-display">
+              <span class="timer-label">Time Remaining</span>
+              <span class="timer-clock" id="test-timer">10:00</span>
+            </div>
+            <button id="btn-submit-test" type="button" class="btn btn-danger btn-block">
+              Submit &amp; End Assessment
+            </button>
+          </div>
+
+          <!-- Camera & Mic Live Monitor -->
+          <div class="sidebar-card proctor-feed-card">
+            <div class="card-subheader">
+              <h3>Live Proctor Feed</h3>
+              <span id="live-face-status" class="face-badge">Face Check: Off</span>
+            </div>
+            <div class="video-preview-wrap video-preview-sm">
+              <video id="test-video" autoplay playsinline muted></video>
+              <span class="recording-dot" title="Local preview active">● LIVE</span>
+            </div>
+            <div class="mic-live-row">
+              <span class="mic-label">Mic</span>
+              <div class="meter-wrapper meter-sm" aria-label="Live microphone meter">
+                <div class="meter-bar" id="test-mic-bar"></div>
+              </div>
+              <span id="test-mic-status" class="small-status">OK</span>
+            </div>
+          </div>
+
+          <!-- Violation Counter Summary -->
+          <div class="sidebar-card violation-card">
+            <div class="violation-summary-row">
+              <div>
+                <span class="violation-label">Recorded Violations</span>
+                <div class="violation-big-count" id="test-violation-count">0</div>
+              </div>
+              <div class="violation-threshold-note">
+                Flag threshold: <strong>5</strong>
+              </div>
+            </div>
+          </div>
+
+          <!-- Collapsible Live Event Log -->
+          <details class="sidebar-card log-card" open>
+            <summary class="log-summary">
+              <span>Live Event Log</span>
+              <span class="badge badge-neutral" id="test-log-count">0 events</span>
+            </summary>
+            <ul id="test-event-list" class="event-list" aria-live="polite"></ul>
+          </details>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ==================== SCREEN 3: REPORT ==================== -->
+    <section id="screen-report" class="screen hidden">
+      <div class="screen-intro">
+        <div>
+          <h1>Assessment Proctoring Report</h1>
+          <p class="subtitle">
+            Complete diagnostic summary of your mock session. No data was transmitted externally.
+          </p>
+        </div>
+        <div class="intro-actions">
+          <button id="btn-download-json" type="button" class="btn btn-primary">
+            Download Report (JSON)
+          </button>
+          <button id="btn-restart" type="button" class="btn btn-secondary">
+            Restart System Check
+          </button>
+        </div>
+      </div>
+
+      <div class="report-stats-grid">
+        <div class="stat-box">
+          <span class="stat-title">Session Duration</span>
+          <strong class="stat-value" id="rep-duration">00:00</strong>
+          <span class="stat-sub" id="rep-flag-status">Status: Clean</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-title">Total Violations</span>
+          <strong class="stat-value" id="rep-total-violations">0</strong>
+          <span class="stat-sub" id="rep-violation-types">0 distinct types</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-title">Hardware Uptime</span>
+          <strong class="stat-value" id="rep-hw-uptime">100% / 100%</strong>
+          <span class="stat-sub">Camera / Microphone OK %</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-title">Network Latency</span>
+          <strong class="stat-value" id="rep-net-latency">-- ms avg</strong>
+          <span class="stat-sub" id="rep-net-spikes">Worst: -- ms | Spikes (&gt;500ms): 0</span>
+        </div>
+      </div>
+
+      <div class="report-columns">
+        <div class="report-card">
+          <h2>Violations by Category</h2>
+          <table class="report-table" id="rep-violations-table">
+            <thead>
+              <tr>
+                <th>Violation Type</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody id="rep-violations-tbody">
+              <tr><td colspan="2">No violations recorded.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="report-card">
+          <h2>Timestamped Event Log</h2>
+          <div class="table-scroll">
+            <table class="report-table" id="rep-events-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Category</th>
+                  <th>Type</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody id="rep-events-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
