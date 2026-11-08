@@ -742,6 +742,10 @@ const Proctor = {
   tick() {
     if (!this.running) return;
     const now = performance.now();
+    // Safety net for missed blur/focus events (common with Alt+Tab, Wayland, fullscreen):
+    // poll document.hasFocus() so a focus loss is always noticed and the return always handled.
+    if (this.awayStart === null && !document.hidden && !document.hasFocus()) this.awayBegin('focus lost (detected by poll)');
+    this.tryReturn();
     // Timer
     const left = Math.max(0, Math.round((this.endsAt - Date.now()) / 1000));
     UI.setText('test-timer', fmtClock(left));
